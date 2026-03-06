@@ -1,0 +1,23 @@
+banks:
+  HDFC:
+    identify_by:
+      sender_contains: "alerts@hdfcbank.bank.in"
+      subject_contains: "UPI txn"
+    fields:
+      amount:
+        pattern: 'Rs\.(\d+(?:\.\d{2})?)'
+      account:
+        pattern: 'account\s+(\d+)'
+      vpa:
+        pattern: 'to VPA\s+(\S+)'
+      merchant:
+        pattern: 'VPA\s+\S+\s+(.+?)\s+on\s+\d{2}-\d{2}-\d{2}'
+      date:
+        pattern: 'on\s+(\d{2}-\d{2}-\d{2})\.'
+        format: "%d-%m-%y"
+      upi_ref:
+        pattern: 'reference number is\s+(\d+)'
+      txn_type:
+        debit_if_contains: "debited"
+        credit_if_contains: "credited"
+    sample: "Dear Customer, Rs.560.00 has been debited from account 8891 to VPA paytm.s1e43i7@pty mariya protein centre on 01-03-26. Your UPI transaction reference number is 927283492221."

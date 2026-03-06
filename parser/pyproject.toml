@@ -1,0 +1,11 @@
+[project]
+name = "expense-parser"
+version = "0.1.0"
+description = "Yahoo Mail expense parser to PostgreSQL"
+requires-python = ">=3.11"
+
+dependencies = [
+    "pyyaml", # read bank_templates.yaml
+    "psycopg2-binary", # PostgreSQL connection
+    "python-dotenv", # manage .env credentials
+]
