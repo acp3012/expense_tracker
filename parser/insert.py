@@ -9,37 +9,6 @@ from dotenv import load_dotenv
 from urllib.parse import quote
 from helper import get_logger
 
-# ── Config ────────────────────────────────────────────────────────────────────
-BASE_DIR      = Path(__file__).parent
-print(f"BASE_DIR: {BASE_DIR}")
-
-load_dotenv(dotenv_path=BASE_DIR / ".env")
-
-PENDING_DIR   = os.getenv("PENDING_DIR",   str(BASE_DIR / "data/pending"))
-PROCESSED_DIR = os.getenv("PROCESSED_DIR", str(BASE_DIR / "data/processed"))
-FAILED_DIR    = os.getenv("FAILED_DIR",    str(BASE_DIR / "data/failed"))
-DB_USER = os.getenv("DB_USER")
-DB_PASSWORD = os.getenv("DB_PASSWORD")
-DB_PASSWORD  = quote(DB_PASSWORD) if DB_PASSWORD else ""
-DB_HOST = os.getenv("DB_HOST", "localhost")
-DB_PORT = os.getenv("DB_PORT", "5432")
-DB_NAME = os.getenv("DB_NAME", "home_expenses")
-LOG_FILE      = os.getenv("LOG_FILE",      str(BASE_DIR / "inserter.log"))
-POLL_INTERVAL = int(os.getenv("POLL_INTERVAL", 30))   # seconds
-if not DB_PASSWORD:
-    raise ValueError("DB_PASS is not set in .env file!")
-
-#set posgres connection string
-DB_DSN = f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
-
-# ── Directory Setup ───────────────────────────────────────────────────────────
-os.makedirs(PENDING_DIR,   exist_ok=True)
-os.makedirs(PROCESSED_DIR, exist_ok=True)
-os.makedirs(FAILED_DIR,    exist_ok=True)
-
-# ── Logging ───────────────────────────────────────────────────────────────────
-
-log = get_logger(LOG_FILE)
 
 # ── Validation ────────────────────────────────────────────────────────────────
 def validate(data: dict) -> list:
@@ -120,9 +89,8 @@ def map_to_row(data: dict) -> dict:
         "fetched_at":    fetched_at,
     }
 
-
 # ── Process Single File ───────────────────────────────────────────────────────
-def process_file(cur, filepath: Path) -> str:
+def process_file(cur, filepath: Path, log ) -> str:
     """
     Process one JSON file.
     Returns: 'inserted' | 'duplicate' | 'skipped' | 'failed'
@@ -173,69 +141,58 @@ def process_file(cur, filepath: Path) -> str:
 # end of process_file function
 
 # ── Main Loop ─────────────────────────────────────────────────────────────────
-def run():
-    # Validate DB config
-    if not DB_DSN:
-        log.error("❌ DB_DSN is not set in .env file!")
-        exit(1)
+def insert_to_db(db_dsn, pending_dir, processed_dir, failed_dir, log):
 
     # Connect to PostgreSQL
     try:
-        conn = psycopg2.connect(DB_DSN)
+        conn = psycopg2.connect(db_dsn)
         conn.autocommit = False
         log.info("✓ Connected to PostgreSQL")
     except psycopg2.Error as e:
         log.error(f"❌ Failed to connect to PostgreSQL: {e}")
-        exit(1)
+        raise e
 
+    #while True:
+    # try:
+    files = sorted(Path(pending_dir).glob("*.json"))
 
-    log.info(f"👀 Watching: {PENDING_DIR} every {POLL_INTERVAL}s")
-    log.info("Press Ctrl+C to stop")
+    if files:
+        log.info(f"Found {len(files)} file(s) to process")
+        inserted = duplicates = skipped = failed = 0
 
-    import time
-    while True:
-        # try:
-        files = sorted(Path(PENDING_DIR).glob("*.json"))
+        for filepath in files:
+            cur = conn.cursor()
+            result = process_file(cur, filepath,log)
 
-        if files:
-            log.info(f"Found {len(files)} file(s) to process")
-            inserted = duplicates = skipped = failed = 0
+            if result == "inserted":
+                conn.commit()
+                shutil.move(str(filepath), str(Path(processed_dir) / filepath.name))
+                inserted += 1
 
-            for filepath in files:
-                cur = conn.cursor()
-                result = process_file(cur, filepath)
+            elif result == "duplicate":
+                conn.commit()
+                shutil.move(str(filepath), str(Path(processed_dir) / filepath.name))
+                duplicates += 1
 
-                if result == "inserted":
-                    conn.commit()
-                    shutil.move(str(filepath), str(Path(PROCESSED_DIR) / filepath.name))
-                    inserted += 1
+            elif result == "failed":
+                conn.rollback()
+                shutil.move(str(filepath), str(Path(failed_dir) / filepath.name))
+                failed += 1
 
-                elif result == "duplicate":
-                    conn.commit()
-                    shutil.move(str(filepath), str(Path(PROCESSED_DIR) / filepath.name))
-                    duplicates += 1
+            cur.close()
 
-                elif result == "failed":
-                    conn.rollback()
-                    shutil.move(str(filepath), str(Path(FAILED_DIR) / filepath.name))
-                    failed += 1
+        log.info(f"── Batch done | Inserted: {inserted} | Duplicates: {duplicates} | Failed: {failed}")
 
-                cur.close()
+    # except KeyboardInterrupt:
+    #     log.info("Stopped by user")
+    #     break
+    # except Exception as e:
+    #     log.error(f"❌ Unexpected error: {e}")
+    #     conn.rollback()
 
-            log.info(f"── Batch done | Inserted: {inserted} | Duplicates: {duplicates} | Failed: {failed}")
-
-        # except KeyboardInterrupt:
-        #     log.info("Stopped by user")
-        #     break
-        # except Exception as e:
-        #     log.error(f"❌ Unexpected error: {e}")
-        #     conn.rollback()
-
-        time.sleep(POLL_INTERVAL)
+    # time.sleep(poll_interval)
 
     conn.close()
     log.info("DB connection closed")
 #end of run function
 
-if __name__ == "__main__":
-    run()

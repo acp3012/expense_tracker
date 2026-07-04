@@ -161,15 +161,12 @@ def fetch_emails(host,port,user,password, state_file,pending_dir,log, since_last
 
     except imaplib.IMAP4.error as e:
         log.error(f"IMAP error: {e}")
-        return
+        raise ValueError(f"IMAP error: {e}")
     except Exception as e:
         log.error(f"Unexpected error: {e}")
-    
+        raise e
 
     
-
-    log.info("-" * 60)
-    log.info(f"Done | New: {new_count} | Skipped: {skip_count} | Failed: {fail_count}")
-    log.info("=" * 60)
+    return new_count, skip_count, fail_count
 
 
