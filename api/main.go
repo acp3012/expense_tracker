@@ -7,37 +7,13 @@ import (
 	"net/http"
 	"os"
 
+	"api/model"
+
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv" // 1. Add this import!// 1. Add this import!
 	_ "github.com/lib/pq"
 )
 
-type User struct {
-	ID      int    `json:"id"`
-	Name    string `json:"name"`
-	Pin     string `json:"pin"`
-	IsAdmin bool   `json:"is_admin"`
-}
-
-type Category struct {
-	ID   int    `json:"id"`
-	Name string `json:"category_name"`
-}
-
-type Expense struct {
-	ID           int     `json:"id"`
-	UserID       int     `json:"user_id"`
-	CategoryID   int     `json:"category_id"`
-	CategoryName string  `json:"category_name,omitempty"`
-	Amount       float64 `json:"amount"`
-	ExpenseDate  string  `json:"expense_date"`
-	Description  string  `json:"description"`
-}
-
-type ReportSummary struct {
-	CategoryName string  `json:"category_name"`
-	TotalAmount  float64 `json:"total_amount"`
-}
 
 var db *sql.DB
 
@@ -53,30 +29,47 @@ func main() {
 	dbUser := os.Getenv("DB_USER")
 	dbPassword := os.Getenv("DB_PASSWORD")
 	dbName := os.Getenv("DB_NAME")
+	basePath := os.Getenv("API_BASE_PATH")
+	port:= os.Getenv("APP_PORT")
+	
 	// fmt.Printf("INFO: Loaded DB_USER=%s, DB_NAME=%s\n", dbUser, dbName)
 	if dbPassword == "" {
 		log.Fatal("FATAL: Database credentials not found in environment!")
 	}
+	
+	if basePath == "" {
+		log.Fatal("FATAL: API Base path not found!")
+	}
+	// port validation and fallback
+	if port == "" {
+		log.Println("WARN: PORT not found in environment, defaulting to 8090")
+		port = "8090"
+	}
 
+	// 3. Format the server address string dynamically
+	serverAddress := fmt.Sprintf("0.0.0.0:%s", port)
+	
 	connStr := fmt.Sprintf("user=%s password=%s dbname=%s sslmode=disable", dbUser, dbPassword, dbName)
 	db, err = sql.Open("postgres", connStr)
 	if err != nil {
 		log.Fatal("FATAL: Cannot connect to DB:", err)
 	}
 	defer db.Close()
-
+		
 	r := gin.Default()
-
+	
+	// 2. Create a Router Group using that base path
+	api := r.Group(basePath)
 	// 1. LOGIN
-	r.POST("/api/login", func(c *gin.Context) {
-		var req User
+	api.POST("/login", func(c *gin.Context) {
+		var req model.User
 		if err := c.ShouldBindJSON(&req); err != nil {
 			log.Printf("ERROR parsing login payload: %v\n", err)
 			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request format"})
 			return
 		}
 
-		var user User
+		var user model.User
 		err := db.QueryRow("SELECT id, name, is_admin FROM users WHERE name = $1 AND pin = $2", req.Name, req.Pin).Scan(&user.ID, &user.Name, &user.IsAdmin)
 		if err != nil {
 			log.Printf("WARN: Failed login attempt for user '%s': %v\n", req.Name, err)
@@ -89,7 +82,7 @@ func main() {
 	})
 
 	// 2. GET USERS
-	r.GET("/api/users", func(c *gin.Context) {
+	api.GET("/users", func(c *gin.Context) {
 		rows, err := db.Query("SELECT id, name FROM users ORDER BY name")
 		if err != nil {
 			log.Printf("ERROR fetching users: %v\n", err)
@@ -98,9 +91,9 @@ func main() {
 		}
 		defer rows.Close()
 
-		var users []User
+		var users []model.User
 		for rows.Next() {
-			var u User
+			var u model.User
 			if err := rows.Scan(&u.ID, &u.Name); err != nil {
 				log.Printf("ERROR scanning user row: %v\n", err)
 				continue
@@ -111,7 +104,7 @@ func main() {
 	})
 
 	// 3. GET CATEGORIES
-	r.GET("/api/categories", func(c *gin.Context) {
+	api.GET("/categories", func(c *gin.Context) {
 		rows, err := db.Query("SELECT id, category_name FROM categories ORDER BY category_name")
 		if err != nil {
 			log.Printf("ERROR fetching categories: %v\n", err)
@@ -120,9 +113,9 @@ func main() {
 		}
 		defer rows.Close()
 
-		var categories []Category
+		var categories []model.Category
 		for rows.Next() {
-			var cat Category
+			var cat model.Category
 			if err := rows.Scan(&cat.ID, &cat.Name); err != nil {
 				log.Printf("ERROR scanning category row: %v\n", err)
 				continue
@@ -133,8 +126,8 @@ func main() {
 	})
 
 	// 4. POST EXPENSE
-	r.POST("/api/expenses", func(c *gin.Context) {
-		var exp Expense
+	api.POST("/expenses", func(c *gin.Context) {
+		var exp model.Expense
 		if err := c.ShouldBindJSON(&exp); err != nil {
 			log.Printf("ERROR: Invalid expense payload: %v\n", err)
 			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid input format"})
@@ -155,9 +148,9 @@ func main() {
 	})
 
 	// 5. UPDATE EXPENSE
-	r.PUT("/api/expenses/:id", func(c *gin.Context) {
+	api.PUT("/expenses/:id", func(c *gin.Context) {
 		id := c.Param("id")
-		var exp Expense
+		var exp model.Expense
 		if err := c.ShouldBindJSON(&exp); err != nil {
 			log.Printf("ERROR parsing update payload for expense %s: %v\n", id, err)
 			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid input format"})
@@ -176,7 +169,7 @@ func main() {
 	})
 
 	// 6. GET RECENT EXPENSES
-	r.GET("/api/expenses/recent", func(c *gin.Context) {
+	api.GET("/expenses/recent", func(c *gin.Context) {
 		userID := c.Query("user_id")
 		rows, err := db.Query(`SELECT e.id, c.category_name, e.amount, e.expense_date, e.description 
 			FROM expenses e JOIN categories c ON e.category_id = c.id WHERE e.user_id = $1 ORDER BY e.expense_date DESC, e.id DESC LIMIT 10`, userID)
@@ -188,9 +181,9 @@ func main() {
 		}
 		defer rows.Close()
 
-		expenses := make([]Expense, 0)
+		expenses := make([]model.Expense, 0)
 		for rows.Next() {
-			var exp Expense
+			var exp model.Expense
 			if err := rows.Scan(&exp.ID, &exp.CategoryName, &exp.Amount, &exp.ExpenseDate, &exp.Description); err != nil {
 				log.Printf("ERROR scanning expense row: %v\n", err)
 				continue
@@ -205,7 +198,7 @@ func main() {
 	})
 
 	// 7. GET REPORTS
-	r.GET("/api/reports", func(c *gin.Context) {
+	api.GET("/reports", func(c *gin.Context) {
 		startDate, endDate, userID := c.Query("start_date"), c.Query("end_date"), c.Query("user_id")
 		
 		query := `SELECT c.category_name, SUM(e.amount) FROM expenses e JOIN categories c ON e.category_id = c.id WHERE e.expense_date >= $1 AND e.expense_date <= $2`
@@ -226,9 +219,9 @@ func main() {
 		}
 		defer rows.Close()
 
-		summaries := make([]ReportSummary, 0)
+		summaries := make([]model.ReportSummary, 0)
 		for rows.Next() {
-			var s ReportSummary
+			var s model.ReportSummary
 			if err := rows.Scan(&s.CategoryName, &s.TotalAmount); err != nil {
 				log.Printf("ERROR scanning report row: %v\n", err)
 				continue
@@ -237,7 +230,66 @@ func main() {
 		}
 		c.JSON(http.StatusOK, summaries)
 	})
+// 8. GET: Fetch the pending notifications
+api.GET("/notifications/pending", func(c *gin.Context) {
+    query := `
+        SELECT id, txn_date, amount, description, upi_ref, merchant
+        FROM account_txn_notification 
+        WHERE process_status = 'PENDING' 
+        ORDER BY txn_date DESC 
+        LIMIT 10;`
 
-	log.Println("Starting Expense API Server on 0.0.0.0:8090...")
-	r.Run("0.0.0.0:8090")
+    rows, err := db.Query(query)
+    if err != nil {
+        log.Printf("ERROR fetching pending items: %v\n", err)
+        c.JSON(http.StatusInternalServerError, gin.H{"error": "Database error"})
+        return
+    }
+    defer rows.Close()
+
+    // Using an empty slice so Gin returns [] instead of null if empty
+    pendingItems := make([]model.PendingNotification, 0) 
+    
+    for rows.Next() {
+        var item model.PendingNotification
+        if err := rows.Scan(&item.ID, &item.TxnDate, &item.Amount, &item.Description, &item.UPIRef, &item.Merchant); err != nil {
+            log.Printf("ERROR scanning pending item row: %v\n", err)
+            continue
+        }
+        pendingItems = append(pendingItems, item)
+    }
+    
+    c.JSON(http.StatusOK, pendingItems)
+})
+
+
+// 9. POST: Process a transaction
+api.POST("/notifications/process", func(c *gin.Context) {
+    var req model.ProcessRequest
+    
+    // Gin makes it super easy to parse incoming JSON using ShouldBindJSON
+    if err := c.ShouldBindJSON(&req); err != nil {
+        log.Printf("ERROR binding JSON: %v\n", err)
+        c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request payload"})
+        return
+    }
+
+    // Execute the Postgres Procedure
+    query := `CALL pUpdateTxnNotification($1, $2, $3, $4)`
+    _, err := db.Exec(query, req.ID, req.CategoryID, req.Description, req.UserID)
+    
+    if err != nil {
+        log.Printf("ERROR executing procedure: %v\n", err)
+        c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to process transaction"})
+        return
+    }
+
+    // Return a simple success message
+    c.JSON(http.StatusOK, gin.H{"status": "success"})
+})
+	// Register the endpoints
+	
+
+	log.Printf("Starting Expense API Server on %s with base path %s...\n", serverAddress, basePath)
+	r.Run(serverAddress)
 }
